@@ -19,10 +19,18 @@ struct RouteParams
 struct Route
 {
     Route() = delete;
-    Route(std::string&& name, RouteParams&& rp, Amount initialOrderflowBal, Amount currentOutflowBal, Amount startingStrategyBal) 
+    Route(
+        std::string&& name,
+        RouteParams&& rp,
+        Amount initialOrderflowBal,
+        Amount initialOutflowBal,
+        Amount startingStrategyBal) 
         : currentOrderflowBal(initialOrderflowBal)
-        , currentOutflowBal(currentOutflowBal)
+        , currentOutflowBal(initialOutflowBal)
         , currentStrategyBal(startingStrategyBal)
+        , maxOrderflowBal(currentOrderflowBal * 1.5)
+        , maxOutflowBal(currentOutflowBal * 1.5)
+        , maxStrategyBal(currentStrategyBal * 1.5)
         , routeName(std::move(name))
         , params(std::move(rp))
     { }
@@ -31,6 +39,9 @@ struct Route
     Amount currentOrderflowBal;
     Amount currentOutflowBal;
     Amount currentStrategyBal;
+    const Amount maxOrderflowBal;
+    const Amount maxOutflowBal;
+    const Amount maxStrategyBal;
     const RouteParams params;
 };
 
@@ -163,8 +174,12 @@ private:
         // Replenish values on each route
         for (auto& route : m_routes)
         {
-            route.currentOrderflowBal += route.params.orderflowRegenPerTick;
-            route.currentOutflowBal += route.params.outflowRegenPerTick;
+            route.currentOrderflowBal = std::min(
+                route.currentOrderflowBal + route.params.orderflowRegenPerTick,
+                route.maxOrderflowBal);
+
+            route.currentOutflowBal = std::min(route.currentOutflowBal + route.params.outflowRegenPerTick,
+                route.maxOutflowBal);
         }
 
         // Trigger the simualate method
@@ -198,6 +213,12 @@ private:
         // Execution strategy actions
         for (const auto& action : actions)
         {
+            if (action.source == action.destination)
+            {
+                std::cout << "!!! Failed to execute action, chains can't be the same" << std::endl;
+                continue;
+            }
+
             // get source + destination chains
             Chain* pSource{ nullptr };
             Chain* pDestination{ nullptr };
@@ -226,19 +247,19 @@ private:
 
             if (!pSource || !pDestination)
             {
-                std::cout << "Failed to find chain, skipping action" << std::endl;
+                std::cout << "!!! Failed to find chain, skipping action" << std::endl;
                 continue;
             }
 
             if (!pRoute)
             {
-                std::cout << "Failed to find route, skipping action" << std::endl;
+                std::cout << "!!! Failed to find route, skipping action" << std::endl;
                 continue;
             }
 
             // check balance
             if (pSource->balance < action.amount) {
-                std::cout << "Insufficient funds for action, skipping action" << std::endl;
+                std::cout << "!!! Insufficient funds for action, skipping action" << std::endl;
                 continue;
             }
             
@@ -246,16 +267,16 @@ private:
             if (action.type == Action::type::bridge)
             {
                 if (pRoute->currentOutflowBal < action.amount) {
-                    std::cout << "Insufficient funds for bridge action, skipping action" << std::endl;
+                    std::cout << "!!! Insufficient funds for [bridge] action, skipping action" << std::endl;
                     continue;
                 }
 
                 if (action.amount < pRoute->params.gasCost) {
-                    std::cout << "Insufficient funds to pay for bridge action, skipping action" << std::endl;
+                    std::cout << "!!! Insufficient funds to pay for [bridge] action, skipping action" << std::endl;
                     continue;
                 }
 
-                Amount bridgedAmount = action.amount - pRoute->params.gasCost;
+                const Amount bridgedAmount = action.amount - pRoute->params.gasCost;
                 pRoute->currentOutflowBal -= action.amount;
                 pSource->balance -= action.amount;
                 
@@ -266,16 +287,16 @@ private:
             else if (action.type == Action::type::execute)
             {
                 if (pRoute->currentOrderflowBal < action.amount) {
-                    std::cout << "Insufficient funds for execute action, skipping action" << std::endl;
+                    std::cout << "!!! Insufficient funds for [execute] action, skipping action" << std::endl;
                     continue;
                 }
 
                 if (action.amount < pRoute->params.gasCost) {
-                    std::cout << "Insufficient funds to pay for execute action, skipping action" << std::endl;
+                    std::cout << "!!! Insufficient funds to pay for [execute] action, skipping action" << std::endl;
                     continue;
                 }
 
-                Amount creditedAmount = (action.amount - pRoute->params.gasCost) * pRoute->params.executionSurplus;
+                const Amount creditedAmount = (action.amount - pRoute->params.gasCost) * pRoute->params.executionSurplus;
                 pRoute->currentOutflowBal -= action.amount;
                 pSource->balance -= action.amount;
 
@@ -314,9 +335,13 @@ public:
     virtual void onTickRecalc(const Routes& routes, const Chains& chains, Actions& actions) override
     {
         // TODO return actions object with steps in this tick
-        // e.g.
-        // To brdige 10 from A to B we would perform:
-        actions.push_back(Action{ Action::type::bridge, "A", "B", 10 });
+        // e.g.1
+        // To bridge 4 from A to B we would perform:
+        actions.push_back(Action{ Action::type::bridge, "A", "B", 4 });
+
+        // e.g.2
+        // To fill an order of 2 on chain B and being funded on B we would perform:
+        actions.push_back(Action{ Action::type::execute, "B", "A", 2 });
     }
 };
 
