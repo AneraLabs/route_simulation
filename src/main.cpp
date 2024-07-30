@@ -4,9 +4,8 @@
 
 using Amount = double;
 using Ticks = uint64_t;
-using LockedAmounts = std::vector<std::pair<Amount, Ticks>>;
 
-struct RouteParams
+struct ChainParams
 {
     const Amount orderflowRegenPerTick;
     const Amount outflowRegenPerTick;
@@ -16,46 +15,37 @@ struct RouteParams
     const Ticks inventoryLockTime;
 };
 
-struct Route
+struct Chain
 {
-    Route() = delete;
-    Route(
+    Chain(
         std::string&& name,
-        RouteParams&& rp,
+        ChainParams&& rp,
         Amount initialOrderflowBal,
         Amount initialOutflowBal,
-        Amount startingStrategyBal) 
-        : currentOrderflowBal(initialOrderflowBal)
+        Amount startingStrategyBal)
+        : chainName(std::move(name))
+        , currentOrderflowBal(initialOrderflowBal)
         , currentOutflowBal(initialOutflowBal)
         , currentStrategyBal(startingStrategyBal)
         , maxOrderflowBal(currentOrderflowBal * 1.5)
         , maxOutflowBal(currentOutflowBal * 1.5)
         , maxStrategyBal(currentStrategyBal * 1.5)
-        , routeName(std::move(name))
         , params(std::move(rp))
+        , balance(startingStrategyBal)
     { }
 
-    const std::string routeName;
+    const std::string chainName;
+    
     Amount currentOrderflowBal;
     Amount currentOutflowBal;
     Amount currentStrategyBal;
     const Amount maxOrderflowBal;
     const Amount maxOutflowBal;
     const Amount maxStrategyBal;
-    const RouteParams params;
-};
-
-using Routes = std::vector<Route>;
-
-struct Chain
-{
-    Chain(std::string&& name, Amount startingStrategyBal)
-        : chainName(std::move(name))
-        , balance(startingStrategyBal)
-    { }
-
-    const std::string chainName;
+    const ChainParams params;
+    
     Amount balance;
+    using LockedAmounts = std::vector<std::pair<Amount, Ticks>>;
     LockedAmounts lockedBalances;
 };
 
@@ -81,7 +71,7 @@ class IStrategy
 public:
     virtual ~IStrategy() = default;
 
-    virtual void onTickRecalc(const Routes& routes, const Chains& chains, Actions& actions) = 0;
+    virtual void onTickRecalc(const Chains& chains, Actions& actions) = 0;
 };
 
 class Simulation
@@ -100,10 +90,14 @@ public:
     {
         reportState();
 
+        std::cout << "Starting simulation.." << std::endl;
+
         for (uint64_t t{ 0 }; t < iterations; ++t)
         {
-            tick();
+            tick(t);
         }
+
+        std::cout << "..finished." << std::endl;
 
         reportState();
     }
@@ -111,26 +105,26 @@ public:
 private:
     void initRoutes()
     {
-        Route routeAB(
-            "A->B",
-            RouteParams{
-                6.4,        // High order flow
-                2.4,        // low bridging rate
+        Chain chainA(
+            "A",
+            ChainParams{
+                0.64,       // High order flow
+                0.24,       // low bridging rate
                 0.01,       // low gas cost
                 1.0005,     // 5 bips profitability
                 6,          // medium bridging wait time ticks
                 2           // low order execution wait time ticks
             },
-            20,
-            20,
-            0);
+            10,
+            30,
+            10              // Starting funds
+        );
 
-        // Medium order flow, medium bridging rate, medium gas cost
-        Route routeBC(
-            "B->C",
-            RouteParams{
-                3.8,        // medium order flow
-                4,          // medium bridging rate
+        Chain chainB(
+            "B",
+            ChainParams{
+                0.38,       // medium order flow
+                0.4,        // medium bridging rate
                 0.05,       // medium gas cost
                 1.0003,     // 3 bips profitability
                 9,          // high bridging wait time ticks
@@ -138,14 +132,14 @@ private:
             },
             30,
             10,
-            0);
+            0
+        );
 
-        // Low order flow, medium bridging rate, medium gas cost
-        Route routeCA(
-            "C->A",
-            RouteParams{
-                1.4,        // Low order flow
-                6,          // high bridging rate
+        Chain chainC(
+            "C",
+            ChainParams{
+                0.14,       // Low order flow
+                0.61,       // high bridging rate
                 0.08,       // high gas cost
                 1.0009,     // 9 bips profitability
                 4,          // medium bridging wait time ticks
@@ -153,47 +147,40 @@ private:
             },
             40,
             30,
-            0);
-
-        m_routes.push_back(std::move(routeAB));
-        m_routes.push_back(std::move(routeBC));
-        m_routes.push_back(std::move(routeCA));
-
-        Chain chainA{ "A", 10 };
-        Chain chainB{ "B", 10 };
-        Chain chainC{ "C", 10 };
+            0
+        );
 
         m_chains.push_back(std::move(chainA));
         m_chains.push_back(std::move(chainB));
         m_chains.push_back(std::move(chainC));
-
     }
 
-    void tick()
+    void tick(uint64_t tickCounter)
     {
-        // Replenish values on each route
-        for (auto& route : m_routes)
+        if (tickCounter % 100 == 0)
         {
-            route.currentOrderflowBal = std::min(
-                route.currentOrderflowBal + route.params.orderflowRegenPerTick,
-                route.maxOrderflowBal);
-
-            route.currentOutflowBal = std::min(route.currentOutflowBal + route.params.outflowRegenPerTick,
-                route.maxOutflowBal);
+            std::cout << "... [" << tickCounter << "] ..." << std::endl;
         }
 
         // Trigger the simualate method
         Actions actions;
-        m_strategy->onTickRecalc(m_routes, m_chains, actions);
+        m_strategy->onTickRecalc(m_chains, actions);
 
         // Tick pending balances and credit to balance if needed
         for (auto& chain : m_chains)
         {
+            chain.currentOrderflowBal = std::min(
+                chain.currentOrderflowBal + chain.params.orderflowRegenPerTick,
+                chain.maxOrderflowBal);
+
+            chain.currentOutflowBal = std::min(chain.currentOutflowBal + chain.params.outflowRegenPerTick,
+                chain.maxOutflowBal);
+
             chain.lockedBalances.erase(
                 std::remove_if(
                     chain.lockedBalances.begin(),
                     chain.lockedBalances.end(),
-                    [&chain](auto& pendingBal) {
+                    [&chain, &tickCounter](auto& pendingBal) {
                         auto& [balance, ticks] = pendingBal;
                         if (ticks > 0) {
                             --ticks;
@@ -201,7 +188,7 @@ private:
 
                         if (ticks == 0) {
                             chain.balance += balance;
-                            std::cout << "Amount [" << balance << "] now available on chain [" << chain.chainName << "]" << std::endl;
+                            std::cout << "[" << tickCounter << "]: amount [" << balance << "] now available on chain [" << chain.chainName << "]" << std::endl;
                             // Mark for removal
                             return true; 
                         }
@@ -215,14 +202,13 @@ private:
         {
             if (action.source == action.destination)
             {
-                std::cout << "!!! Failed to execute action, chains can't be the same" << std::endl;
+                std::cout << "[" << tickCounter << "]: !!! Failed to execute action, chains can't be the same" << std::endl;
                 continue;
             }
 
             // get source + destination chains
             Chain* pSource{ nullptr };
             Chain* pDestination{ nullptr };
-            Route* pRoute{ nullptr };
 
             for (auto& chain : m_chains)
             {
@@ -236,73 +222,65 @@ private:
                 }
             }
 
-            for (auto& route : m_routes)
-            {
-                const bool sourceMatches = route.routeName[0] == action.source[0];
-                const bool destinationMatches = route.routeName[3] == action.destination[0];
-                if (sourceMatches && destinationMatches) {
-                    pRoute = &route;
-                }
-            }
-
             if (!pSource || !pDestination)
             {
-                std::cout << "!!! Failed to find chain, skipping action" << std::endl;
-                continue;
-            }
-
-            if (!pRoute)
-            {
-                std::cout << "!!! Failed to find route, skipping action" << std::endl;
+                std::cout << "[" << tickCounter << "]: !!! Failed to find chain, skipping action" << std::endl;
                 continue;
             }
 
             // check balance
             if (pSource->balance < action.amount) {
-                std::cout << "!!! Insufficient funds for action, skipping action" << std::endl;
+                std::cout << "[" << tickCounter << "]: !!! Insufficient funds for action, skipping action" << std::endl;
                 continue;
             }
             
             // Execute action if possible
             if (action.type == Action::type::bridge)
             {
-                if (pRoute->currentOutflowBal < action.amount) {
-                    std::cout << "!!! Insufficient funds for [bridge] action, skipping action" << std::endl;
+                if (pDestination->currentOutflowBal < action.amount) {
+                    std::cout << "[" << tickCounter << "]: !!! Insufficient funds for [bridge] action on destination, skipping action" << std::endl;
                     continue;
                 }
 
-                if (action.amount < pRoute->params.gasCost) {
-                    std::cout << "!!! Insufficient funds to pay for [bridge] action, skipping action" << std::endl;
+                if (action.amount < pSource->params.gasCost) {
+                    std::cout << "[" << tickCounter << "]: !!! Insufficient funds to pay for [bridge] action, skipping action" << std::endl;
                     continue;
                 }
 
-                const Amount bridgedAmount = action.amount - pRoute->params.gasCost;
-                pRoute->currentOutflowBal -= action.amount;
+                const Amount bridgedAmount = action.amount - pSource->params.gasCost;
+                // Destination bridging pool amount reduced
+                pDestination->currentOutflowBal -= action.amount;
+                // Source bridging pool amount increased
+                pSource->currentOutflowBal += action.amount;
+                // Strategy balance reduced
                 pSource->balance -= action.amount;
                 
-                pDestination->lockedBalances.push_back({ bridgedAmount, pRoute->params.bridgingTime });
+                pDestination->lockedBalances.push_back({ bridgedAmount, pSource->params.bridgingTime });
 
-                std::cout << "Bridged from [" << pSource->chainName << "] to [" << pDestination->chainName + "] amount [" << bridgedAmount << "] in [" << pRoute->params.bridgingTime  << "] ticks" << std::endl;
+                std::cout << "[" << tickCounter << "]: Bridged from [" << pSource->chainName << "] to [" << pDestination->chainName + "] amount [" << bridgedAmount << "] in [" << pSource->params.bridgingTime  << "] ticks" << std::endl;
             }
             else if (action.type == Action::type::execute)
             {
-                if (pRoute->currentOrderflowBal < action.amount) {
-                    std::cout << "!!! Insufficient funds for [execute] action, skipping action" << std::endl;
+                if (pSource->currentOrderflowBal < action.amount) {
+                    std::cout << "[" << tickCounter << "]: !!! Insufficient funds for [execute] action, skipping action" << std::endl;
                     continue;
                 }
 
-                if (action.amount < pRoute->params.gasCost) {
-                    std::cout << "!!! Insufficient funds to pay for [execute] action, skipping action" << std::endl;
+                if (action.amount < pSource->params.gasCost) {
+                    std::cout << "[" << tickCounter << "]: !!! Insufficient funds to pay for [execute] action, skipping action" << std::endl;
                     continue;
                 }
 
-                const Amount creditedAmount = (action.amount - pRoute->params.gasCost) * pRoute->params.executionSurplus;
-                pRoute->currentOutflowBal -= action.amount;
+                const Amount creditedAmount = (action.amount - pSource->params.gasCost) * pSource->params.executionSurplus;
+                // Reduce source chain order amount
+                pSource->currentOrderflowBal -= action.amount;
+                
+                // Strategy balance reduced
                 pSource->balance -= action.amount;
 
-                pDestination->lockedBalances.push_back({ creditedAmount, pRoute->params.inventoryLockTime });
+                pDestination->lockedBalances.push_back({ creditedAmount, pSource->params.inventoryLockTime });
 
-                std::cout << "Executed order on [" << pSource->chainName << "] credited on [" << pDestination->chainName + "] amount [" << creditedAmount << "] in [" << pRoute->params.inventoryLockTime << "]" << std::endl;
+                std::cout << "[" << tickCounter << "]: Executed order on [" << pSource->chainName << "] credited on [" << pDestination->chainName + "] amount [" << creditedAmount << "] in [" << pSource->params.inventoryLockTime << "]" << std::endl;
             }
         }
     }
@@ -323,7 +301,6 @@ private:
 
     IStrategy* m_strategy;
 
-    Routes m_routes;
     Chains m_chains;
 };
 
@@ -332,16 +309,42 @@ private:
 class Strategy : public IStrategy
 {
 public:
-    virtual void onTickRecalc(const Routes& routes, const Chains& chains, Actions& actions) override
+    virtual void onTickRecalc(const Chains& chains, Actions& actions) override
     {
+        const Chain* pChainA = getChain(chains, "A");
+        const Chain* pChainB = getChain(chains, "B");
+        const Chain* pChainC = getChain(chains, "C");
+
         // TODO return actions object with steps in this tick
         // e.g.1
         // To bridge 4 from A to B we would perform:
-        actions.push_back(Action{ Action::type::bridge, "A", "B", 4 });
+        
+        if (   pChainA->balance > 2
+            && pChainB->currentOutflowBal > 2)
+        {
+            actions.push_back(Action{ Action::type::bridge, "A", "B", 2 });
+        }
 
         // e.g.2
         // To fill an order of 2 on chain B and being funded on B we would perform:
-        actions.push_back(Action{ Action::type::execute, "B", "A", 2 });
+        if (   pChainB->balance > 5 
+            && pChainB->currentOrderflowBal > 5 )
+        {
+            actions.push_back(Action{ Action::type::execute, "B", "A", 5 });
+        }
+    }
+
+    const Chain* getChain(const Chains& chains, const std::string& name)
+    {
+        auto it = std::find_if(chains.begin(), chains.end(),
+            [&name](const Chain& chain) {
+                return chain.chainName == name;
+            });
+
+        if (it != chains.end()) {
+            return &(*it);
+        }
+        return nullptr;
     }
 };
 
@@ -349,8 +352,5 @@ int main()
 {
     Strategy st;
     Simulation sim(reinterpret_cast<IStrategy*>(&st));
-
-    std::cout << "Starting simulation.." << std::endl;
-    sim.simulate(10);
-    std::cout << "..finished." << std::endl;
+    sim.simulate(1000);
 }
