@@ -48,7 +48,7 @@ actions.push_back(Action{ Action::type::execute, "B", "A", 5 });
 
 Strategies are judged on the sum of the balances on all chains after 1000 iterations.
 
-## How to Build
+## How to Compile
 
 To build the project, you can use Visual Studio with the provided solution file or any C++ compiler that supports the C++17 standard. Below are the steps for building with a general C++ compiler:
 
