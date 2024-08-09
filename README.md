@@ -20,6 +20,14 @@ The entire project is contained within a single C++ file, which defines the foll
 - **Simulation**: Class managing the simulation, executing actions based on the strategy, and updating chain states over iterations.
 - **Strategy**: Example implementation of a strategy that decides actions to perform on each tick.
 
+## How the simulation works
+
+![image](https://github.com/user-attachments/assets/e19b527b-a8c3-4983-a55a-5c345718be64)
+
+The Simulation class defines all the logic for updating the simulated state of the chains within each step (called a tick).
+
+Within each tick the Strategy instance is called with a current snapshot of the state of the simulation and is given the opportunity to append actions which the Simulation executes before the tick completes.
+
 ## How to build a strategy
 
 To build a custom Strategy, implement the IStrategy interface by defining the onTickRecalc method and pass this class into the simulation instance.
