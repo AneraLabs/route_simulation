@@ -110,13 +110,13 @@ private:
             ChainParams{
                 0.64,       // High order flow
                 0.24,       // low bridging rate
-                0.01,       // low gas cost
+                0.0001,     // low gas cost
                 1.0005,     // 5 bips profitability
-                6,          // medium bridging wait time ticks
-                2           // low order execution wait time ticks
+                4,          // medium bridging wait time ticks
+                4           // low order execution wait time ticks
             },
-            10,
-            30,
+            10,             // Initial order flow balance
+            30,             // Initial bridge amount balance
             10              // Starting funds
         );
 
@@ -125,28 +125,28 @@ private:
             ChainParams{
                 0.38,       // medium order flow
                 0.4,        // medium bridging rate
-                0.05,       // medium gas cost
+                0.0005,     // medium gas cost
                 1.0003,     // 3 bips profitability
-                9,          // high bridging wait time ticks
-                4           // medium order execution wait time ticks
+                6,          // high bridging wait time ticks
+                6           // medium order execution wait time ticks
             },
-            30,
-            10,
+            30,             // Initial order flow balance
+            10,             // Initial bridge amount balance
             0
         );
 
         Chain chainC(
             "C",
             ChainParams{
-                0.14,       // Low order flow
+                0.24,       // Low order flow
                 0.61,       // high bridging rate
-                0.08,       // high gas cost
+                0.0008,     // high gas cost
                 1.0009,     // 9 bips profitability
                 4,          // medium bridging wait time ticks
-                6           // high order execution wait time ticks
+                8           // high order execution wait time ticks
             },
-            40,
-            30,
+            40,             // Initial order flow balance
+            30,             // Initial bridge amount balance
             0
         );
 
@@ -161,10 +161,6 @@ private:
         {
             std::cout << "... [" << tickCounter << "] ..." << std::endl;
         }
-
-        // Trigger the simualate method
-        Actions actions;
-        m_strategy->onTickRecalc(m_chains, actions);
 
         // Tick pending balances and credit to balance if needed
         for (auto& chain : m_chains)
@@ -188,7 +184,8 @@ private:
 
                         if (ticks == 0) {
                             chain.balance += balance;
-                            std::cout << "[" << tickCounter << "]: amount [" << balance << "] now available on chain [" << chain.chainName << "]" << std::endl;
+                            std::cout << "[" << tickCounter << "]: amount [" << balance << "] now available on "
+                                      << "chain [" << chain.chainName << "]" << std::endl;
                             // Mark for removal
                             return true; 
                         }
@@ -196,6 +193,10 @@ private:
                     }),
                 chain.lockedBalances.end());
         }
+
+        // Trigger the simualate method
+        Actions actions;
+        m_strategy->onTickRecalc(m_chains, actions);
 
         // Execution strategy actions
         for (const auto& action : actions)
@@ -257,30 +258,36 @@ private:
                 
                 pDestination->lockedBalances.push_back({ bridgedAmount, pSource->params.bridgingTime });
 
-                std::cout << "[" << tickCounter << "]: Bridged from [" << pSource->chainName << "] to [" << pDestination->chainName + "] amount [" << bridgedAmount << "] in [" << pSource->params.bridgingTime  << "] ticks" << std::endl;
+                std::cout << "[" << tickCounter << "]: Bridged from [" << pSource->chainName << "] to "
+                          << "[" << pDestination->chainName + "] amount [" << bridgedAmount << "] in "
+                          << "[" << pSource->params.bridgingTime  << "] ticks" << std::endl;
             }
             else if (action.type == Action::type::execute)
             {
-                if (pSource->currentOrderflowBal < action.amount) {
-                    std::cout << "[" << tickCounter << "]: !!! Insufficient funds for [execute] action, skipping action" << std::endl;
+                if (pDestination->currentOrderflowBal < action.amount) {
+                    std::cout << "[" << tickCounter << "]: !!! Insufficient destination funds for [execute] action, skipping action" << std::endl;
                     continue;
                 }
 
                 if (action.amount < pSource->params.gasCost) {
-                    std::cout << "[" << tickCounter << "]: !!! Insufficient funds to pay for [execute] action, skipping action" << std::endl;
+                    std::cout << "[" << tickCounter << "]: !!! Insufficient source funds to pay for [execute] action, skipping action" << std::endl;
                     continue;
                 }
 
-                const Amount creditedAmount = (action.amount - pSource->params.gasCost) * pSource->params.executionSurplus;
+                const Amount amountAfterGasCost = action.amount - pSource->params.gasCost;
+                const Amount creditedAmount = amountAfterGasCost * pSource->params.executionSurplus;
+
                 // Reduce source chain order amount
-                pSource->currentOrderflowBal -= action.amount;
+                pDestination->currentOrderflowBal -= action.amount;
                 
                 // Strategy balance reduced
                 pSource->balance -= action.amount;
 
                 pDestination->lockedBalances.push_back({ creditedAmount, pSource->params.inventoryLockTime });
 
-                std::cout << "[" << tickCounter << "]: Executed order on [" << pSource->chainName << "] credited on [" << pDestination->chainName + "] amount [" << creditedAmount << "] in [" << pSource->params.inventoryLockTime << "]" << std::endl;
+                std::cout << "[" << tickCounter << "]: Executed order on [" << pSource->chainName << "] "
+                          << "credited on [" << pDestination->chainName + "] amount [" << creditedAmount << "] "
+                          << "in [" << pSource->params.inventoryLockTime << "] ticks" << std::endl;
             }
         }
     }
@@ -288,6 +295,8 @@ private:
     void reportState()
     {
         // output result of value changes
+        Amount total{ 0. };
+
         for (auto& chain : m_chains)
         {
             Amount lockedTotal(0);
@@ -295,8 +304,12 @@ private:
             {
                 lockedTotal += locked;
             }
-            std::cout << "Chain [" << chain.chainName << "] balance [" << chain.balance << "] + locked [" << lockedTotal  << "]" << std::endl;
+            std::cout << "Chain [" << chain.chainName << "] balance [" << chain.balance << "] + locked [" << lockedTotal << "]" << std::endl;
+            total += chain.balance;
+            total += lockedTotal;
         }
+
+        std::cout << "Total : " << total << std::endl;
     }
 
     IStrategy* m_strategy;
@@ -317,7 +330,7 @@ public:
 
         // TODO return actions object with steps in this tick
         // e.g.1
-        // To bridge 4 from A to B we would perform:
+        // To bridge 2 from A to B we would perform:
         
         if (   pChainA->balance > 2
             && pChainB->currentOutflowBal > 2)
@@ -326,7 +339,7 @@ public:
         }
 
         // e.g.2
-        // To fill an order of 2 on chain B and being funded on B we would perform:
+        // To fill an order of 5 on chain B and being funded on A we would perform:
         if (   pChainB->balance > 5 
             && pChainB->currentOrderflowBal > 5 )
         {
