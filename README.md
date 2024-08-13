@@ -30,6 +30,13 @@ Within each tick the Strategy instance is called with a current snapshot of the 
 
 ## How to build a strategy
 
+### Generating a surplus
+
+Two operations are supported within the simulator, execution of orders (equivalent to cross chain filling) and bridging. Executing an order results in a surplus with more funds being received on the destination chain than supplied on the source chain. Bridging is a loss generating operation to stage inventory onto a different chain to execute orders there. Each chain has a certain about of available order flow which replenishes over time.
+
+Crafting the most effective strategy will require solving for optimal utilisation and staging of funds between the chains.
+
+### Writing the code
 To build a custom Strategy, implement the IStrategy interface by defining the onTickRecalc method and pass this class into the simulation instance.
 
 The onTickRecalc method receives the current state of all chains and allows a strategy author to decide the actions to take on each tick.
